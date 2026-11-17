@@ -1,0 +1,32 @@
+# Gradle & IDE
+.gradle/
+**/.gradle/
+**/build/
+build/
+.idea/
+**/.idea/
+*.iml
+.kotlin/
+**/.kotlin/
+local.properties
+**/local.properties
+.DS_Store
+Thumbs.db
+
+# Keystores & Secrets
+.env
+**/.env
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Debug / Temp / Scratch
+*.hprof
+*.log
+__pycache__/
+*.pyc
+核心源码/apk成品/
+*.bak

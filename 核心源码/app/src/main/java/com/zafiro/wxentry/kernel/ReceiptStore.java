@@ -1,0 +1,77 @@
+package com.zafiro.wxentry.kernel;
+
+import java.util.Random;
+
+final class ReceiptStore {
+    static final String LEGACY_OWNER=Kernel.WXDIR+"receipt.legacy.owner";
+    private static final Random RANDOM=new Random();
+    static String account() {
+        String id=Kernel.receiptAccount();
+        if(!ReceiptConfig.validId(id)) id = "wxid_default";
+        return id;
+    }
+    static String path(ReceiptConfig.Feature feature,String account) {
+        if(!ReceiptConfig.validId(account)) account = "wxid_default";
+        return Kernel.WXDIR+feature.key+".receipt.settings."+ModuleState.hash(account).substring(0,16);
+    }
+    static ReceiptConfig current(ReceiptConfig.Feature feature) { return load(feature,account()); }
+    static synchronized ReceiptConfig load(ReceiptConfig.Feature feature,String account) {
+        String path=path(feature,account),text=ModuleState.read(path);
+        if(text!=null)return ReceiptConfig.decode(text); // Corruption fails closed; never silently resets to allow-all.
+        ReceiptConfig config=new ReceiptConfig();
+        if(feature==ReceiptConfig.Feature.RED_PACKET) {
+            String owner=ModuleState.read(LEGACY_OWNER),hash=ModuleState.hash(account);
+            if(owner==null) {
+                if(!ModuleState.write(LEGACY_OWNER,hash+"\n"))throw new IllegalStateException("旧设置迁移标记保存失败");owner=hash;
+            }
+            if(hash.equals(owner.trim()))migrate(config);
+        }
+        if(!save(feature,account,config)) {
+            Kernel.T("ReceiptStore initial save ignored error for " + feature.key);
+        }
+        return config;
+    }
+    static void migrate(ReceiptConfig config) {
+        config.enabled=ModuleState.flag(Kernel.RP_ON_PATH);
+        String whitelist=Kernel.readText(Kernel.RP_WL_PATH);
+        if(whitelist!=null && !whitelist.trim().isEmpty()) {
+            config.group.rule=ReceiptConfig.Rule.WHITE;
+            for(String line:whitelist.split("\n")) {
+                line=line.trim();if(line.isEmpty() || line.startsWith("#") || line.equals("@none"))continue;
+                if(ReceiptConfig.validMember(line,ReceiptConfig.Scope.GROUP))config.group.white.add(line);
+            }
+        }
+        String mode=Kernel.readText(Kernel.RP_MODE_PATH);mode=mode==null?"":mode.trim();
+        if(mode.equals("group"))config.person.rule=ReceiptConfig.Rule.OFF;
+        if(mode.equals("c2c"))config.group.rule=ReceiptConfig.Rule.OFF;
+        String delay=Kernel.readText(Kernel.RP_DELAY_PATH);
+        if(delay!=null)try {
+            String[] values=delay.trim().split("-",2);long a=Long.parseLong(values[0].trim()),b=values.length==1?a:Long.parseLong(values[1].trim());
+            long lo=Math.min(a,b),hi=Math.max(a,b);
+            if(lo>=0 && hi<=ReceiptConfig.MAX_DELAY_MS) { config.delayEnabled=true;config.minDelayMs=lo;config.maxDelayMs=hi; }
+        } catch(RuntimeException malformed) { }
+    }
+    static synchronized boolean save(ReceiptConfig.Feature feature,String account,ReceiptConfig config) {
+        return ModuleState.write(path(feature,account),config.encode());
+    }
+    static boolean enabled(ReceiptConfig.Feature feature) {
+        try { return current(feature).enabled; }catch(Throwable unavailable) { return false; }
+    }
+    static boolean permits(ReceiptConfig.Feature feature,String account,String talker) {
+        try { ReceiptConfig c=load(feature,account);return c.enabled && c.permits(talker); }
+        catch(Throwable unavailable) { return false; }
+    }
+    static long delay(ReceiptConfig.Feature feature,String account) { return load(feature,account).delay(RANDOM); }
+    static boolean permitsText(ReceiptConfig.Feature feature,String account,String talker,String text) {
+        try { ReceiptConfig c=load(feature,account);return c.enabled && c.permits(talker) && keywordsPermit(c,text); }
+        catch(Throwable unavailable) { return false; }
+    }
+    static boolean permitsMessage(ReceiptConfig.Feature feature,String account,String talker,String content) {
+        try {
+            ReceiptConfig c=load(feature,account);
+            return c.enabled && c.permits(talker) && keywordsPermit(c,keywordsActive(c)?ReceiptConfig.messageText(feature,content):null);
+        }catch(Throwable unavailable){return false;}
+    }
+    static boolean keywordsActive(ReceiptConfig c) { return Kernel.receiptKeywordsEnabled() && c.keywords.action!=ReceiptConfig.KeywordAction.OFF; }
+    static boolean keywordsPermit(ReceiptConfig c,String text) { return !keywordsActive(c) || c.keywords.permits(text); }
+}
